@@ -1,0 +1,12 @@
+core\InkTank.class
+interfaces\Persistence.class
+services\BankTechnician.class
+core\PaperTank.class
+services\ATMService.class
+interfaces\TechActions.class
+persistence\SqliteHandler.class
+core\MachineState.class
+Main.class
+persistence\JDBCHandler.class
+core\Account.class
+services\AuthService.class
