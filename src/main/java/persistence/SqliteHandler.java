@@ -34,6 +34,15 @@ public class SqliteHandler implements Persistence {
     public void saveATMState(List<Account> accounts, double atmCash, PaperTank paperTank, InkTank inkTank) {
     }
 
+    @Override
+    public List<BankNote> loadBankNotes() {
+        return null;
+    }
+
+    @Override
+    public void saveBankNotes(List<BankNote> bankNotes) {
+    }
+
     public void closeConnection() {
         System.out.println("[INFO] Database connection closed");
     }

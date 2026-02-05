@@ -7,12 +7,18 @@ import core.Account;
 import core.PaperTank;
 // Import InkTank model class - manages ink inventory for receipts
 import core.InkTank;
+// Import BankNote model class - represents bank note denominations
+import core.BankNote;
 // Import Persistence interface - abstraction for data persistence layer (DIP principle)
 import interfaces.Persistence;
 // Import JDBCHandler persistence implementation - for logging transactions
 import persistence.JDBCHandler;
 // Import List interface - needed for managing collections of accounts
 import java.util.List;
+// Import HashMap - needed for bank note selection
+import java.util.HashMap;
+// Import Map - needed for bank note selection
+import java.util.Map;
 
 /**
  * ============== CONTROLLER (MVC) ==============
@@ -68,6 +74,10 @@ public class ATMService {
     // Used to check availability and log consumption during receipt printing
     private InkTank inkTank;
     
+    // bankNotes field - tracks available bank note denominations in the ATM
+    // Maps denomination to BankNote object for inventory management
+    private List<BankNote> bankNotes;
+    
     // persistence field - reference to Persistence abstraction (DIP principle)
     // Allows this class to work with any Persistence implementation without knowing concrete type
     // SINGLETON-LIKE: receives SINGLE JDBCHandler instance from Main.main()
@@ -101,6 +111,9 @@ public class ATMService {
         // Load ink tank state from persistent storage
         // Creates an InkTank object with the current ink unit count
         this.inkTank = persistence.loadInkTank();
+        // Load bank notes from persistent storage
+        // Creates a list of BankNote objects representing ATM inventory
+        this.bankNotes = persistence.loadBankNotes();
         // Initialize currentAccount to null (no user logged in yet)
         // Will be set when a user successfully authenticates
         this.currentAccount = null;
@@ -251,6 +264,85 @@ public class ATMService {
         
         // Save updated ATM state to persistent storage
         // Updates all accounts (with new balance), atmCash, paperTank, inkTank in database
+        saveState();
+        // Return true to indicate withdrawal was successful
+        return true;
+    }
+
+    // ============== WITHDRAWAL WITH BANK NOTES BREAKDOWN ==============
+    // withdrawWithBankNotes() - processes cash withdrawal with bank notes tracking
+    // Parameter: amount - the amount to withdraw in dollars
+    // Parameter: bankNotesBreakdown - string describing notes dispensed (e.g., "10x$5, 5x$10")
+    // Returns: boolean - true if withdrawal successful, false if failed
+    public boolean withdrawWithBankNotes(double amount, String bankNotesBreakdown) {
+        // Check if a user is currently logged in (currentAccount is not null)
+        if (currentAccount == null) {
+            // No user logged in: cannot perform withdrawal
+            System.out.println("Error: No account logged in.");
+            // Return false to indicate withdrawal failed
+            return false;
+        }
+
+        // Validate that withdrawal amount is positive and non-zero
+        if (amount <= 0) {
+            // Amount is invalid (zero or negative)
+            System.out.println("Error: Invalid amount.");
+            // Return false to indicate withdrawal failed
+            return false;
+        }
+
+        // Check if ATM has sufficient cash to dispense
+        // Compare requested withdrawal amount with available ATM cash
+        if (amount > atmCash) {
+            // ATM doesn't have enough cash for this withdrawal
+            // Display error with available cash amount for user reference
+            System.out.println("Error: ATM does not have sufficient cash. Available: $" + String.format("%.2f", atmCash));
+            // Return false to indicate withdrawal failed
+            return false;
+        }
+
+        // Save previous balance for transaction logging (before withdrawal)
+        // This is needed to record the balance change in transaction history
+        double previousBalance = currentAccount.getBalance();
+        // Attempt to withdraw amount from account (validates sufficient funds)
+        // withdraw() method on Account checks if account balance >= amount
+        // If successful, subtracts amount from account balance
+        // If fails, returns false
+        if (!currentAccount.withdraw(amount)) {
+            // Account doesn't have sufficient funds (insufficient balance)
+            System.out.println("Error: Insufficient funds in your account.");
+            // Return false to indicate withdrawal failed
+            return false;
+        }
+
+        // Withdrawal succeeded: deduct cash from ATM machine
+        // Reduce ATM cash inventory by the withdrawn amount
+        atmCash -= amount;
+        // Get the account's new balance after withdrawal
+        double newBalance = currentAccount.getBalance();
+        // Display success message to user
+        System.out.println("Withdrawal successful! Dispensing $" + String.format("%.2f", amount));
+        // Display the bank notes breakdown
+        if (bankNotesBreakdown != null && !bankNotesBreakdown.isEmpty()) {
+            System.out.println("Bank Notes: " + bankNotesBreakdown);
+        }
+        // Display updated account balance
+        System.out.println("Remaining Balance: $" + String.format("%.2f", newBalance));
+        
+        // Print receipt for this withdrawal transaction
+        printReceipt("WITHDRAWAL");
+        
+        // Log transaction to database with bank notes breakdown if JDBCHandler is available
+        // Check if jdbcHandler was successfully initialized in constructor
+        if (jdbcHandler != null) {
+            // Log the withdrawal transaction with bank notes breakdown details
+            // Parameters: account number, holder name, transaction type, amount, previous balance, new balance, bank notes breakdown
+            jdbcHandler.logTransaction(currentAccount.getAccountNumber(), currentAccount.getAccountHolder(), 
+                                      "WITHDRAWAL", amount, previousBalance, newBalance, bankNotesBreakdown);
+        }
+        
+        // Save updated ATM state to persistent storage
+        // Updates all accounts (with new balance), atmCash, paperTank, inkTank, bank notes in database
         saveState();
         // Return true to indicate withdrawal was successful
         return true;
@@ -580,4 +672,105 @@ public class ATMService {
         // Return the ink tank
         return inkTank; 
     }
+
+    // ============== BANK NOTES MANAGEMENT ==============
+    // getBankNotes() - retrieve available bank notes from ATM
+    // Returns: List of BankNote objects with current denominations and quantities
+    public List<BankNote> getBankNotes() {
+        return bankNotes;
+    }
+
+    // getPersistence() - retrieve persistence abstraction for database operations
+    // Returns: Persistence interface for saving bank notes and other operations
+    public Persistence getPersistence() {
+        return persistence;
+    }
+
+    // displayBankNotes() - display available bank notes to customer
+    // Shows denominations and quantities available for withdrawal
+    public void displayBankNotes() {
+        System.out.println("\n=== Available Bank Notes ===");
+        System.out.println("Denomination | Quantity | Total Value");
+        System.out.println("================================");
+        
+        double totalValue = 0;
+        for (BankNote note : bankNotes) {
+            System.out.printf("    $%-2d    |   %2d    |   $%.2f\n", 
+                note.getDenomination(), note.getQuantity(), note.getTotalValue());
+            totalValue += note.getTotalValue();
+        }
+        
+        System.out.println("================================");
+        System.out.printf("Total ATM Cash: $%.2f\n\n", totalValue);
+    }
+
+    /**
+     * dispenseBankNotes() - Dispense selected bank notes from ATM
+     * Validates that the requested notes are available and dispenses them
+     * @param selectedNotes - Map of denomination to quantity to dispense
+     * @return String representation of notes dispensed (for receipt), or null if failed
+     */
+    public String dispenseBankNotes(Map<Integer, Integer> selectedNotes) {
+        // Validate that we have all requested denominations available
+        for (Map.Entry<Integer, Integer> entry : selectedNotes.entrySet()) {
+            int denomination = entry.getKey();
+            int requestedQty = entry.getValue();
+            
+            // Find bank note with this denomination
+            BankNote note = bankNotes.stream()
+                .filter(n -> n.getDenomination() == denomination)
+                .findFirst()
+                .orElse(null);
+            
+            // Check if denomination exists and has enough quantity
+            if (note == null || note.getQuantity() < requestedQty) {
+                System.out.println("Error: Insufficient $" + denomination + " notes available.");
+                return null; // Dispense failed
+            }
+        }
+        
+        // All validations passed - dispense the notes
+        StringBuilder breakdown = new StringBuilder();
+        for (Map.Entry<Integer, Integer> entry : selectedNotes.entrySet()) {
+            int denomination = entry.getKey();
+            int qty = entry.getValue();
+            
+            // Find the bank note and dispense
+            for (BankNote note : bankNotes) {
+                if (note.getDenomination() == denomination) {
+                    note.dispense(qty);
+                    
+                    if (breakdown.length() > 0) {
+                        breakdown.append(", ");
+                    }
+                    breakdown.append(qty).append("x$").append(denomination);
+                    
+                    System.out.println("  Dispensing " + qty + " x $" + denomination + " notes");
+                    break;
+                }
+            }
+        }
+        
+        // Save updated bank notes to database
+        if (jdbcHandler != null) {
+            persistence.saveBankNotes(bankNotes);
+        }
+        
+        return breakdown.toString();
+    }
+
+    /**
+     * validateWithdrawalAmount() - Check if requested amount can be satisfied with available notes
+     * @param amount - The withdrawal amount requested
+     * @return true if the amount can be dispensed with available notes
+     */
+    public boolean validateWithdrawalAmount(double amount) {
+        // Calculate total ATM cash from bank notes
+        double totalAvailable = bankNotes.stream()
+            .mapToDouble(BankNote::getTotalValue)
+            .sum();
+        
+        return amount > 0 && amount <= totalAvailable;
+    }
 }
+

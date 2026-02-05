@@ -4,7 +4,10 @@ import interfaces.TechActions;
 import interfaces.Persistence;
 import persistence.JDBCHandler;
 import core.Account;
+import core.BankNote;
 import java.util.Scanner;
+import java.util.Map;
+import java.util.HashMap;
 
 /**
  * ============== CONTROLLER (MVC) ==============
@@ -97,36 +100,72 @@ public class BankTechnician implements TechActions {
     }
 
     // ============== TECHNICIAN OPERATION: View ATM Status ==============
-    // Coordinates: retrieves ATM state from Controller → displays to technician
+    // Coordinates: retrieves ATM state from Controller → displays to technician (including bank notes)
     private void displayATMStatus() {
         System.out.println("\n[ATM STATUS]");
         System.out.println("ATM Cash: $" + String.format("%.2f", service.getATMCash()));
         System.out.println("Paper Sheets: " + service.getPaperTank().getCurrentSheets());
         System.out.println("Ink Units: " + service.getInkTank().getCurrentInk());
         System.out.println("Active Accounts: " + service.getAccounts().size());
+        
+        // Display bank notes inventory
+        System.out.println("\n[BANK NOTES INVENTORY]");
+        service.displayBankNotes();
     }
 
     // ============== TECHNICIAN OPERATION: Refill ATM Cash ==============
-    // Coordinates: input validation → ATM state update → audit logging → persistence
+    // Coordinates: input validation → bank note selection → ATM state update → audit logging → persistence
     private void refillATMCash(Scanner scanner) {
         System.out.print("Enter amount to refill: $");
         try {
             if (!scanner.hasNextLine()) return;
             double amount = Double.parseDouble(scanner.nextLine().trim());
             if (amount > 0) {
+                // Display available bank notes to technician
+                System.out.println("\n=== Current Bank Notes Inventory ===");
+                service.displayBankNotes();
+                
+                // Get bank note selection from technician (pass the scanner, don't create new one)
+                System.out.println("Select which bank notes you want to add:");
+                Map<Integer, Integer> selectedNotes = getTechnicianBankNoteSelection(amount, scanner);
+                
+                // If technician cancelled, abort refill
+                if (selectedNotes == null) {
+                    System.out.println("Cash refill cancelled.");
+                    return;
+                }
+                
+                // Validate total matches amount to refill
+                double totalFromNotes = selectedNotes.entrySet().stream()
+                    .mapToDouble(e -> e.getKey() * e.getValue())
+                    .sum();
+                
+                if (Math.abs(totalFromNotes - amount) > 0.01) {
+                    System.out.println("Error: Selected notes total ($" + String.format("%.2f", totalFromNotes) + 
+                                     ") doesn't match refill amount ($" + String.format("%.2f", amount) + ")");
+                    return;
+                }
+                
                 // ============== SRP: Track previous state for audit ==============
                 double previousCash = service.getATMCash();
                 double newCash = previousCash + amount;
+                
                 // ============== UPDATE ATM CASH IN SERVICE ==============
-                // Actually update the atmCash field in ATMService
                 service.setATMCash(newCash);
                 System.out.println("ATM refilled with $" + String.format("%.2f", amount));
+                
+                // ============== ADD BANK NOTES TO INVENTORY ==============
+                // Refill the selected bank notes
+                String bankNotesBreakdown = refillBankNotes(selectedNotes);
+                
+                System.out.println("Bank Notes Added: " + bankNotesBreakdown);
                 System.out.println("New ATM balance: $" + String.format("%.2f", newCash));
                 
                 // ============== AUDIT LOGGING (via JDBCHandler) ==============
-                // Log technician activity for compliance and troubleshooting
+                // Log technician activity with bank notes breakdown
                 if (jdbcHandler != null) {
-                    jdbcHandler.logTechnicianActivity("CASH_REFILL", amount, "ATM cash refilled", previousCash, newCash);
+                    jdbcHandler.logTechnicianActivity("CASH_REFILL", amount, 
+                        "ATM cash refilled with notes: " + bankNotesBreakdown, previousCash, newCash);
                 }
                 
                 // ============== DIP: Persist state via Persistence abstraction ==============
@@ -137,6 +176,125 @@ public class BankTechnician implements TechActions {
         } catch (NumberFormatException e) {
             System.out.println("Invalid input.");
         }
+    }
+
+    // ============== HELPER: Get Technician Bank Note Selection ==============
+    // Gets technician's selection of bank notes for cash refill
+    // IMPORTANT: Accepts scanner parameter to avoid creating new Scanner and closing System.in
+    private Map<Integer, Integer> getTechnicianBankNoteSelection(double targetAmount, Scanner scanner) {
+        Map<Integer, Integer> selectedNotes = new HashMap<>();
+        double totalSelected = 0;
+        
+        while (totalSelected < targetAmount) {
+            System.out.println("\nSelect bank notes to add up to $" + String.format("%.2f", targetAmount));
+            System.out.println("Current selection: $" + String.format("%.2f", totalSelected));
+            System.out.println("Remaining: $" + String.format("%.2f", targetAmount - totalSelected));
+            System.out.println("\nOptions:");
+            
+            // Display all available denominations
+            int optionNum = 1;
+            for (BankNote note : service.getBankNotes()) {
+                System.out.println(optionNum + ". Add $" + note.getDenomination() + " note(s)");
+                optionNum++;
+            }
+            System.out.println(optionNum + ". Confirm selection");
+            System.out.println((optionNum + 1) + ". Cancel refill");
+            
+            System.out.print("\nChoose option: ");
+            try {
+                String choice = scanner.nextLine().trim();
+                int choiceNum = Integer.parseInt(choice);
+                
+                java.util.List<BankNote> bankNotes = service.getBankNotes();
+                
+                // Check if user selected a denomination
+                if (choiceNum >= 1 && choiceNum <= bankNotes.size()) {
+                    BankNote selectedNote = bankNotes.get(choiceNum - 1);
+                    int denomination = selectedNote.getDenomination();
+                    
+                    // Ask how many notes of this denomination to add
+                    System.out.print("How many $" + denomination + " notes to add? ");
+                    String qtyStr = scanner.nextLine().trim();
+                    int quantity = Integer.parseInt(qtyStr);
+                    
+                    if (quantity <= 0) {
+                        System.out.println("Invalid quantity.");
+                        continue;
+                    }
+                    
+                    // Validate that we don't exceed requested amount
+                    double newTotal = totalSelected + (denomination * quantity);
+                    if (newTotal > targetAmount) {
+                        System.out.println("Error: That would exceed the refill amount of $" + 
+                                         String.format("%.2f", targetAmount) + ".");
+                        continue;
+                    }
+                    
+                    // Add to selection
+                    selectedNotes.put(denomination, selectedNotes.getOrDefault(denomination, 0) + quantity);
+                    totalSelected += (denomination * quantity);
+                    System.out.println("Added " + quantity + " x $" + denomination + " notes.");
+                    
+                } else if (choiceNum == (bankNotes.size() + 1)) {
+                    // User confirmed
+                    if (totalSelected == targetAmount) {
+                        System.out.println("Selection confirmed: $" + String.format("%.2f", totalSelected));
+                        return selectedNotes;
+                    } else if (totalSelected < targetAmount) {
+                        System.out.println("Insufficient amount selected. Need $" + 
+                                         String.format("%.2f", targetAmount - totalSelected) + " more.");
+                    } else {
+                        System.out.println("Over the refill amount. Please adjust your selection.");
+                    }
+                    
+                } else if (choiceNum == (bankNotes.size() + 2)) {
+                    // User cancelled
+                    return null;
+                } else {
+                    System.out.println("Invalid option. Please try again.");
+                }
+            } catch (NumberFormatException e) {
+                System.out.println("Invalid input. Please enter a valid option number.");
+            }
+        }
+        
+        if (totalSelected == targetAmount) {
+            return selectedNotes;
+        }
+        
+        return null;
+    }
+
+    // ============== HELPER: Refill Bank Notes ==============
+    // Updates bank note inventory with technician's selections
+    private String refillBankNotes(Map<Integer, Integer> selectedNotes) {
+        StringBuilder breakdown = new StringBuilder();
+        java.util.List<BankNote> bankNotes = service.getBankNotes();
+        
+        for (Map.Entry<Integer, Integer> entry : selectedNotes.entrySet()) {
+            int denomination = entry.getKey();
+            int qty = entry.getValue();
+            
+            // Find the bank note and refill
+            for (BankNote note : bankNotes) {
+                if (note.getDenomination() == denomination) {
+                    note.refill(qty);
+                    
+                    if (breakdown.length() > 0) {
+                        breakdown.append(", ");
+                    }
+                    breakdown.append(qty).append("x$").append(denomination);
+                    break;
+                }
+            }
+        }
+        
+        // Save updated bank notes to database
+        if (service.getPersistence() != null) {
+            service.getPersistence().saveBankNotes(bankNotes);
+        }
+        
+        return breakdown.toString();
     }
 
     @SuppressWarnings("unused")
@@ -151,24 +309,58 @@ public class BankTechnician implements TechActions {
 
     @SuppressWarnings("unused")
     // ============== TECHNICIAN OPERATION: Collect Cash from ATM ==============
+    // Coordinates: amount input → bank note selection → ATM state update → audit logging
     private void collectATMCash(Scanner scanner) {
         System.out.print("Enter amount to collect: $");
         try {
             if (!scanner.hasNextLine()) return;
             double amount = Double.parseDouble(scanner.nextLine().trim());
             if (amount > 0 && amount <= service.getATMCash()) {
+                // Display current bank notes to technician
+                System.out.println("\n=== Current Bank Notes Inventory ===");
+                service.displayBankNotes();
+                
+                // Get bank note selection from technician (pass the scanner, don't create new one)
+                System.out.println("Select which bank notes you want to collect:");
+                Map<Integer, Integer> selectedNotes = getTechnicianBankNoteSelection(amount, scanner);
+                
+                // If technician cancelled, abort collection
+                if (selectedNotes == null) {
+                    System.out.println("Cash collection cancelled.");
+                    return;
+                }
+                
+                // Validate total matches amount to collect
+                double totalFromNotes = selectedNotes.entrySet().stream()
+                    .mapToDouble(e -> e.getKey() * e.getValue())
+                    .sum();
+                
+                if (Math.abs(totalFromNotes - amount) > 0.01) {
+                    System.out.println("Error: Selected notes total ($" + String.format("%.2f", totalFromNotes) + 
+                                     ") doesn't match collection amount ($" + String.format("%.2f", amount) + ")");
+                    return;
+                }
+                
                 // ============== SRP: Track previous state for audit ==============
                 double previousCash = service.getATMCash();
                 double newCash = previousCash - amount;
+                
                 // ============== UPDATE ATM CASH IN SERVICE ==============
-                // Actually update the atmCash field in ATMService
                 service.setATMCash(newCash);
                 System.out.println("Cash collected: $" + String.format("%.2f", amount));
+                
+                // ============== REMOVE BANK NOTES FROM INVENTORY ==============
+                // Collects the selected bank notes
+                String bankNotesBreakdown = collectBankNotes(selectedNotes);
+                
+                System.out.println("Bank Notes Collected: " + bankNotesBreakdown);
                 System.out.println("Remaining ATM balance: $" + String.format("%.2f", newCash));
                 
                 // ============== AUDIT LOGGING (via JDBCHandler) ==============
+                // Log technician activity with bank notes breakdown
                 if (jdbcHandler != null) {
-                    jdbcHandler.logTechnicianActivity("CASH_COLLECTION", amount, "Cash collected from ATM", previousCash, newCash);
+                    jdbcHandler.logTechnicianActivity("CASH_COLLECTION", amount, 
+                        "Cash collected from ATM - notes: " + bankNotesBreakdown, previousCash, newCash);
                 }
                 
                 sync();
@@ -178,6 +370,44 @@ public class BankTechnician implements TechActions {
         } catch (NumberFormatException e) {
             System.out.println("Invalid input.");
         }
+    }
+
+    // ============== HELPER: Collect Bank Notes ==============
+    // Updates bank note inventory by removing collected notes
+    private String collectBankNotes(Map<Integer, Integer> selectedNotes) {
+        StringBuilder breakdown = new StringBuilder();
+        java.util.List<BankNote> bankNotes = service.getBankNotes();
+        
+        for (Map.Entry<Integer, Integer> entry : selectedNotes.entrySet()) {
+            int denomination = entry.getKey();
+            int qty = entry.getValue();
+            
+            // Find the bank note and collect
+            for (BankNote note : bankNotes) {
+                if (note.getDenomination() == denomination) {
+                    // Verify we have enough notes
+                    if (note.getQuantity() < qty) {
+                        System.out.println("Error: Not enough $" + denomination + " notes available.");
+                        return null;
+                    }
+                    
+                    note.dispense(qty);
+                    
+                    if (breakdown.length() > 0) {
+                        breakdown.append(", ");
+                    }
+                    breakdown.append(qty).append("x$").append(denomination);
+                    break;
+                }
+            }
+        }
+        
+        // Save updated bank notes to database
+        if (service.getPersistence() != null) {
+            service.getPersistence().saveBankNotes(bankNotes);
+        }
+        
+        return breakdown.toString();
     }
 
     // ============== TECHNICIAN OPERATION: Refill Paper ==============

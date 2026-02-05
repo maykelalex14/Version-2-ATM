@@ -2,8 +2,10 @@ core\InkTank.class
 interfaces\Persistence.class
 services\BankTechnician.class
 core\PaperTank.class
+persistence\JDBCHandler$JDBCHandlerHolder.class
 services\ATMService.class
 interfaces\TechActions.class
+core\BankNote.class
 persistence\SqliteHandler.class
 core\MachineState.class
 Main.class

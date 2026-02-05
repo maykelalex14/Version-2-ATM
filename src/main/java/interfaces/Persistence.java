@@ -3,6 +3,7 @@ package interfaces;
 import core.PaperTank;
 import core.InkTank;
 import core.Account;
+import core.BankNote;
 import java.util.List;
 
 /**
@@ -39,4 +40,8 @@ public interface Persistence {
     PaperTank loadPaperTank();
     InkTank loadInkTank();
     void saveATMState(List<Account> accounts, double atmCash, PaperTank paperTank, InkTank inkTank);
+    
+    // ============== Bank Notes Persistence Methods ==============
+    List<BankNote> loadBankNotes();
+    void saveBankNotes(List<BankNote> bankNotes);
 }

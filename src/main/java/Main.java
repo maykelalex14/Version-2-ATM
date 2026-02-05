@@ -4,8 +4,13 @@ import persistence.JDBCHandler;
 import services.*;
 // Import Account model class which represents user account data
 import core.Account;
+// Import BankNote class for bank note handling
+import core.BankNote;
 // Import Scanner for reading user input from console
 import java.util.Scanner;
+// Import Map and HashMap for bank note selection
+import java.util.Map;
+import java.util.HashMap;
 
 /**
  * ============== VIEW (MVC) ==============
@@ -393,8 +398,8 @@ public class Main {
     }
 
     // ============== VIEW: Withdrawal Handler ==============
-    // handleWithdrawal() method - processes user cash withdrawal transaction
-    // VIEW RESPONSIBILITY: Display account info, collect withdrawal amount
+    // handleWithdrawal() method - processes user cash withdrawal transaction with bank note selection
+    // VIEW RESPONSIBILITY: Display account info, collect withdrawal amount and bank note selection
     // CONTROLLER RESPONSIBILITY (ATMService): Execute withdrawal logic and update database
     private static void handleWithdrawal() {
         // Call atmService.displayAccountInfo() to show current balance to user before withdrawal
@@ -411,11 +416,38 @@ public class Main {
                 System.out.println("Withdrawal cancelled.");
             // Check if amount is positive (valid withdrawal amount)
             } else if (amount > 0) {
-                // ============== MVC: Delegate business logic to Controller ==============
-                // Call atmService.withdraw() to process withdrawal with specified amount
-                // Controller validates sufficient funds, updates balance, records transaction, etc.
-                atmService.withdraw(amount);
-                // Control returns here after withdrawal is processed
+                // Validate that ATM has sufficient cash for this withdrawal
+                if (atmService.validateWithdrawalAmount(amount)) {
+                    // ============== NEW: Bank Note Selection ==============
+                    // Display available bank notes to the customer
+                    atmService.displayBankNotes();
+                    
+                    // Get bank note selection from customer
+                    Map<Integer, Integer> selectedNotes = getBankNoteSelection(amount);
+                    
+                    // If user cancelled bank note selection, abort withdrawal
+                    if (selectedNotes == null) {
+                        System.out.println("Withdrawal cancelled.");
+                        return;
+                    }
+                    
+                    // ============== DISPENSE BANK NOTES ==============
+                    // Dispense the selected bank notes and get breakdown for receipt
+                    String bankNotesBreakdown = atmService.dispenseBankNotes(selectedNotes);
+                    
+                    // Check if bank note dispension was successful
+                    if (bankNotesBreakdown != null) {
+                        // ============== MVC: Delegate business logic to Controller ==============
+                        // Call atmService.withdrawWithBankNotes() to process withdrawal with bank notes breakdown
+                        atmService.withdrawWithBankNotes(amount, bankNotesBreakdown);
+                    } else {
+                        // Bank note dispension failed - restore user's withdrawal attempt
+                        System.out.println("Unable to dispense selected bank notes. Please try again.");
+                    }
+                } else {
+                    // ATM doesn't have sufficient cash available
+                    System.out.println("Error: ATM does not have sufficient cash available for this withdrawal.");
+                }
             // Amount is negative (invalid)
             } else {
                 // Print error message if amount is invalid (negative)
@@ -427,6 +459,112 @@ public class Main {
             System.out.println("Invalid amount entered.");
         }
         // Method ends and control returns to userMenu()
+    }
+
+    // ============== HELPER: Get Bank Note Selection from Customer ==============
+    // getBankNoteSelection() method - gets customer's selection of bank notes for withdrawal
+    // Parameter: targetAmount - the total amount customer wants to withdraw
+    // Returns: Map of denomination to quantity selected, or null if user cancels
+    private static Map<Integer, Integer> getBankNoteSelection(double targetAmount) {
+        // Create map to store customer's selections (denomination -> quantity)
+        Map<Integer, Integer> selectedNotes = new HashMap<>();
+        // Track total amount selected so far
+        double totalSelected = 0;
+        
+        // Loop until customer confirms their selection or enters 0 to cancel
+        while (totalSelected < targetAmount) {
+            System.out.println("\nSelect bank notes to make up $" + String.format("%.2f", targetAmount));
+            System.out.println("Current selection: $" + String.format("%.2f", totalSelected));
+            System.out.println("Remaining: $" + String.format("%.2f", targetAmount - totalSelected));
+            System.out.println("\nOptions:");
+            
+            // Display all available denominations
+            int optionNum = 1;
+            for (BankNote note : atmService.getBankNotes()) {
+                System.out.println(optionNum + ". Add $" + note.getDenomination() + " note");
+                optionNum++;
+            }
+            System.out.println(optionNum + ". Confirm selection");
+            System.out.println((optionNum + 1) + ". Cancel withdrawal");
+            
+            System.out.print("\nChoose option: ");
+            try {
+                String choice = scanner.nextLine().trim();
+                int choiceNum = Integer.parseInt(choice);
+                
+                // Get list of available bank notes
+                java.util.List<BankNote> bankNotes = atmService.getBankNotes();
+                
+                // Check if user selected a denomination (1 to number of denominations)
+                if (choiceNum >= 1 && choiceNum <= bankNotes.size()) {
+                    // Get the selected denomination
+                    BankNote selectedNote = bankNotes.get(choiceNum - 1);
+                    int denomination = selectedNote.getDenomination();
+                    
+                    // Ask how many notes of this denomination
+                    System.out.print("How many $" + denomination + " notes? ");
+                    String qtyStr = scanner.nextLine().trim();
+                    int quantity = Integer.parseInt(qtyStr);
+                    
+                    // Validate quantity
+                    if (quantity <= 0) {
+                        System.out.println("Invalid quantity.");
+                        continue;
+                    }
+                    
+                    // Validate that we don't exceed requested amount
+                    double newTotal = totalSelected + (denomination * quantity);
+                    if (newTotal > targetAmount) {
+                        System.out.println("Error: That would exceed the requested amount of $" + 
+                                         String.format("%.2f", targetAmount) + ".");
+                        continue;
+                    }
+                    
+                    // Validate that ATM has enough notes
+                    if (selectedNote.getQuantity() < quantity) {
+                        System.out.println("Error: Only " + selectedNote.getQuantity() + " x $" + 
+                                         denomination + " notes available.");
+                        continue;
+                    }
+                    
+                    // Add to selection
+                    selectedNotes.put(denomination, selectedNotes.getOrDefault(denomination, 0) + quantity);
+                    totalSelected += (denomination * quantity);
+                    System.out.println("Added " + quantity + " x $" + denomination + " notes.");
+                    
+                // Check if user selected confirm option
+                } else if (choiceNum == (bankNotes.size() + 1)) {
+                    // User confirmed - check if selection matches target amount
+                    if (totalSelected == targetAmount) {
+                        // Selection is perfect
+                        System.out.println("Selection confirmed: $" + String.format("%.2f", totalSelected));
+                        return selectedNotes;
+                    } else if (totalSelected < targetAmount) {
+                        System.out.println("Insufficient amount selected. Need $" + 
+                                         String.format("%.2f", targetAmount - totalSelected) + " more.");
+                    } else {
+                        System.out.println("Over the requested amount. Please adjust your selection.");
+                    }
+                    
+                // Check if user selected cancel option
+                } else if (choiceNum == (bankNotes.size() + 2)) {
+                    // User cancelled
+                    return null;
+                } else {
+                    // Invalid option
+                    System.out.println("Invalid option. Please try again.");
+                }
+            } catch (NumberFormatException e) {
+                System.out.println("Invalid input. Please enter a valid option number.");
+            }
+        }
+        
+        // If exact amount was selected, return the selection
+        if (totalSelected == targetAmount) {
+            return selectedNotes;
+        }
+        
+        return null;
     }
 
     // ============== VIEW: Deposit Handler ==============

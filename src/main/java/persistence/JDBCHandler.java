@@ -185,6 +185,15 @@ public class JDBCHandler implements Persistence {
                 ")"
             );
 
+            // ============== Create bank_notes table (Track ATM note inventory) ==============
+            stmt.execute(
+                "CREATE TABLE IF NOT EXISTS bank_notes (" +
+                "  denomination INTEGER PRIMARY KEY," +
+                "  quantity INTEGER NOT NULL DEFAULT 0," +
+                "  last_updated TIMESTAMP DEFAULT CURRENT_TIMESTAMP" +
+                ")"
+            );
+
             // ============== Create transactions table (Audit log for compliance) ==============
             stmt.execute(
                 "CREATE TABLE IF NOT EXISTS transactions (" +
@@ -195,6 +204,7 @@ public class JDBCHandler implements Persistence {
                 "  amount REAL NOT NULL," +
                 "  previous_balance REAL NOT NULL," +
                 "  new_balance REAL NOT NULL," +
+                "  bank_notes_breakdown TEXT," +
                 "  timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP," +
                 "  FOREIGN KEY (account_number) REFERENCES accounts(account_number)" +
                 ")"
@@ -233,6 +243,18 @@ public class JDBCHandler implements Persistence {
                     "INSERT INTO technician_credentials (username, password, full_name, role) " +
                     "VALUES ('admin', '1234', 'System Administrator', 'TECHNICIAN')"
                 );
+            }
+            rs.close();
+
+            // ============== Initialize bank notes if empty ==============
+            rs = stmt.executeQuery("SELECT COUNT(*) FROM bank_notes");
+            if (rs.next() && rs.getInt(1) == 0) {
+                // Initialize ATM with standard bank note denominations
+                stmt.execute("INSERT INTO bank_notes (denomination, quantity) VALUES (5, 100)");
+                stmt.execute("INSERT INTO bank_notes (denomination, quantity) VALUES (10, 100)");
+                stmt.execute("INSERT INTO bank_notes (denomination, quantity) VALUES (20, 150)");
+                stmt.execute("INSERT INTO bank_notes (denomination, quantity) VALUES (50, 50)");
+                stmt.execute("INSERT INTO bank_notes (denomination, quantity) VALUES (100, 50)");
             }
             rs.close();
 
@@ -452,10 +474,75 @@ public class JDBCHandler implements Persistence {
     // ============== TRANSACTION LOGGING (Audit Trail for Compliance) ==============
     // Called by ATMService to log all financial transactions
     // Purpose: Maintain audit trail for regulatory compliance and analysis
+    // ============== BANK NOTES MANAGEMENT ==============
+    /**
+     * Load all bank notes from database
+     * @return List of BankNote objects with current denominations and quantities
+     */
+    public List<BankNote> loadBankNotes() {
+        List<BankNote> bankNotes = new ArrayList<>();
+        String sql = "SELECT denomination, quantity FROM bank_notes ORDER BY denomination DESC";
+
+        try (Connection conn = getConnection();
+             Statement stmt = conn.createStatement();
+             ResultSet rs = stmt.executeQuery(sql)) {
+
+            while (rs.next()) {
+                int denomination = rs.getInt("denomination");
+                int quantity = rs.getInt("quantity");
+                bankNotes.add(new BankNote(denomination, quantity));
+            }
+        } catch (SQLException e) {
+            System.err.println("Error loading bank notes: " + e.getMessage());
+        }
+
+        return bankNotes;
+    }
+
+    /**
+     * Save bank notes to database (after dispensing notes)
+     * @param bankNotes - List of BankNote objects to save
+     */
+    public void saveBankNotes(List<BankNote> bankNotes) {
+        try (Connection conn = getConnection()) {
+            conn.setAutoCommit(false);
+
+            try {
+                String updateSQL = "UPDATE bank_notes SET quantity = ? WHERE denomination = ?";
+                try (PreparedStatement pstmt = conn.prepareStatement(updateSQL)) {
+                    for (BankNote note : bankNotes) {
+                        pstmt.setInt(1, note.getQuantity());
+                        pstmt.setInt(2, note.getDenomination());
+                        pstmt.addBatch();
+                    }
+                    pstmt.executeBatch();
+                }
+
+                conn.commit();
+            } catch (SQLException e) {
+                conn.rollback();
+                System.err.println("Error saving bank notes: " + e.getMessage());
+            }
+        } catch (SQLException e) {
+            System.err.println("Error in saveBankNotes: " + e.getMessage());
+        }
+    }
+
+    // ============== OVERLOADED LOG TRANSACTION WITH BANK NOTES ==============
+    /**
+     * Log transaction with bank notes breakdown
+     * @param accountNumber - Account performing transaction
+     * @param accountHolder - Account holder name
+     * @param transactionType - WITHDRAWAL, DEPOSIT, TRANSFER, etc.
+     * @param amount - Transaction amount
+     * @param previousBalance - Balance before transaction
+     * @param newBalance - Balance after transaction
+     * @param bankNotesBreakdown - String representation of bank notes used (e.g., "100x$5, 50x$10")
+     */
     public void logTransaction(String accountNumber, String accountHolder, String transactionType, 
-                               double amount, double previousBalance, double newBalance) {
-        String sql = "INSERT INTO transactions (account_number, account_holder, transaction_type, amount, previous_balance, new_balance) " +
-                     "VALUES (?, ?, ?, ?, ?, ?)";
+                               double amount, double previousBalance, double newBalance, String bankNotesBreakdown) {
+        String sql = "INSERT INTO transactions (account_number, account_holder, transaction_type, amount, previous_balance, new_balance, bank_notes_breakdown) " +
+                     "VALUES (?, ?, ?, ?, ?, ?, ?)";
 
         try (Connection conn = getConnection();
              PreparedStatement pstmt = conn.prepareStatement(sql)) {
@@ -465,10 +552,21 @@ public class JDBCHandler implements Persistence {
             pstmt.setDouble(4, amount);
             pstmt.setDouble(5, previousBalance);
             pstmt.setDouble(6, newBalance);
+            pstmt.setString(7, bankNotesBreakdown);
             pstmt.executeUpdate();
         } catch (SQLException e) {
             System.err.println("Error logging transaction: " + e.getMessage());
         }
+    }
+
+    // ============== ORIGINAL LOG TRANSACTION (For backwards compatibility) ==============
+    /**
+     * Log transaction without bank notes breakdown
+     * (Kept for backwards compatibility with existing code)
+     */
+    public void logTransaction(String accountNumber, String accountHolder, String transactionType, 
+                               double amount, double previousBalance, double newBalance) {
+        logTransaction(accountNumber, accountHolder, transactionType, amount, previousBalance, newBalance, null);
     }
 
     // ============== TRANSACTION HISTORY RETRIEVAL ==============
