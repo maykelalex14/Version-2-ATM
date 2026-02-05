@@ -138,10 +138,8 @@ public class Main {
             System.out.println("1. User Login");
             // Display menu option 2: Technician Login
             System.out.println("2. Technician Login");
-            // Display menu option 3: Create New User Account
-            System.out.println("3. Create New User");
-            // Display menu option 4: Exit application
-            System.out.println("4. Exit");
+            // Display menu option 3: Exit application
+            System.out.println("3. Exit");
             // Prompt user to enter their choice (with > symbol)
             System.out.print("> ");
             
@@ -163,14 +161,8 @@ public class Main {
                     handleTechnicianLogin();  // Route to technician authentication flow
                     // Control returns here after technician login completes
                     break;
-                // User selected option "3" - Create New Account
+                // User selected option "3" - Exit Application
                 case "3":
-                    // Call handleCreateNewUser() method to execute account creation flow
-                    handleCreateNewUser();  // Route to account creation flow
-                    // Control returns here after account creation completes
-                    break;
-                // User selected option "4" - Exit Application
-                case "4":
                     // Print exit message to user
                     System.out.println("Thank you for using the ATM. Goodbye!");
                     // Set running flag to false to exit the while loop and terminate program
@@ -298,71 +290,6 @@ public class Main {
                     // Continue loop - user will see menu again and can make valid selection
             }
         }
-    }
-
-    // ============== VIEW: Create New User Flow ==============
-    // handleCreateNewUser() method - collects new account information and creates account
-    // VIEW RESPONSIBILITY: Collect and validate input
-    // CONTROLLER RESPONSIBILITY (ATMService): Create account and persist to database
-    private static void handleCreateNewUser() {
-        // Print section header to indicate account creation screen
-        System.out.println("\n=== CREATE NEW USER ===");
-        // Prompt user to enter the new account number
-        System.out.print("Enter Account Number: ");
-        // Read account number from input and remove whitespace
-        String accountNumber = scanner.nextLine().trim();
-        // Prompt user to enter the account holder's full name
-        System.out.print("Enter Account Holder Name: ");
-        // Read account holder name from input and remove whitespace
-        String accountHolder = scanner.nextLine().trim();
-        // Prompt user to enter initial deposit amount in dollars
-        System.out.print("Enter Initial Balance: $");
-        
-        // Declare variable to store initial balance (must be inside try block to be initialized)
-        double initialBalance;
-        // Try block: attempt to parse user input as a double (number)
-        try {
-            // Convert user's string input to double (decimal number) for currency amount
-            initialBalance = Double.parseDouble(scanner.nextLine().trim());
-            // Check if initial balance is negative (invalid for starting balance)
-            if (initialBalance < 0) {
-                // Print error message if balance is negative
-                System.out.println("Balance cannot be negative.");
-                // Exit method and return to main menu - account creation cancelled
-                return;
-            }
-        } catch (NumberFormatException e) {
-            // Catch block: executes if user input cannot be converted to a number
-            // Print error message indicating invalid numeric input
-            System.out.println("Invalid balance amount.");
-            // Exit method and return to main menu - account creation cancelled
-            return;
-        }
-        
-        // Prompt user to enter 4-digit PIN for account security
-        System.out.print("Enter PIN (4 digits): ");
-        // Read PIN from input and remove whitespace
-        String pin = scanner.nextLine().trim();
-        
-        // ============== INPUT VALIDATION: PIN Format Check ==============
-        // Check if PIN length is NOT equal to 4 OR PIN doesn't contain only digits
-        if (pin.length() != 4 || !pin.matches("\\d+")) {
-            // Print error message if PIN format is invalid
-            System.out.println("PIN must be exactly 4 digits.");
-            // Exit method and return to main menu - account creation cancelled
-            return;
-        }
-        
-        // ============== MVC: Create Model instance ==============
-        // Create new Account object with provided information (account number, holder name, balance, PIN)
-        Account newAccount = new Account(accountNumber, accountHolder, initialBalance, pin);
-        
-        // ============== MVC: Delegate persistence to Controller ==============
-        // Call atmService.createNewAccount() to save new account to database
-        atmService.createNewAccount(newAccount);
-        // Print success message to confirm account was created
-        System.out.println("Account created successfully!");
-        // Method ends and control returns to mainMenu()
     }
 
     // ============== VIEW: Technician Authentication Flow ==============
